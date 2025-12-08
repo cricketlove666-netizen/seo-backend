@@ -14,7 +14,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    // STEP 1: Perform a simple Google query using scrape
     const googleUrl =
       "https://www.google.com/search?q=" +
       encodeURIComponent(keyword) +
@@ -22,15 +21,32 @@ export default async function handler(req, res) {
 
     const response = await fetch(googleUrl, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; SEO-GPT/1.0)"
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/123.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html",
       }
     });
+
+    // If Google blocks the request
+    if (!response.ok) {
+      return res.status(200).json({
+        success: true,
+        keyword,
+        overview: {
+          summary: `AI Overview for '${keyword}'. Google blocked SERP scraping, so here's a fallback answer.`,
+          bulletPoints: [],
+          whatToKnow: []
+        },
+        sources: []
+      });
+    }
 
     const html = await response.text();
     const $ = cheerio.load(html);
 
-    // Extract titles + snippets from search results
     const results = [];
+
     $("div.g").each((i, el) => {
       const title = $(el).find("h3").text().trim();
       const snippet = $(el).find(".VwiC3b").text().trim();
@@ -41,49 +57,45 @@ export default async function handler(req, res) {
       }
     });
 
-    // STEP 2: Generate a synthetic AI overview summary
-    const summary = generateAIOverview(keyword, results);
+    if (results.length === 0) {
+      return res.status(200).json({
+        success: true,
+        keyword,
+        overview: {
+          summary: `AI Overview for '${keyword}' — not enough SERP data found.`,
+          bulletPoints: [],
+          whatToKnow: []
+        },
+        sources: []
+      });
+    }
+
+    // Build overview
+    const summaryText = results
+      .map(r => r.snippet)
+      .join(" ")
+      .slice(0, 800);
+
+    const overview = {
+      summary: `AI Overview for '${keyword}': ${summaryText}`,
+      bulletPoints: results.slice(0, 3).map(r => r.title),
+      whatToKnow: results.slice(0, 5).map(r => ({
+        title: r.title,
+        note: r.snippet
+      }))
+    };
 
     return res.status(200).json({
       success: true,
       keyword,
-      overview: summary,
-      sources: results.slice(0, 5) // top 5 sources
+      overview,
+      sources: results.slice(0, 5)
     });
-  } catch (error) {
+
+  } catch (err) {
     return res.status(500).json({
-      error: "Failed to generate overview.",
-      details: error.toString()
+      error: "AI overview failed",
+      details: err.message || String(err)
     });
   }
-}
-
-// Simple local AI-style summarization engine
-function generateAIOverview(keyword, results) {
-  if (!results.length) return "Not enough data to generate an overview.";
-
-  const combinedText = results
-    .map(r => r.snippet)
-    .join(" ")
-    .slice(0, 800); // keep clean length
-
-  return {
-    summary:
-      `Here is an AI-powered overview for '${keyword}': ` +
-      combinedText,
-
-    bulletPoints: extractBulletPoints(results),
-    whatToKnow: extractWhatToKnow(results)
-  };
-}
-
-function extractBulletPoints(results) {
-  return results.slice(0, 3).map(r => r.title);
-}
-
-function extractWhatToKnow(results) {
-  return results.slice(0, 5).map(r => ({
-    title: r.title,
-    note: r.snippet
-  }));
 }
