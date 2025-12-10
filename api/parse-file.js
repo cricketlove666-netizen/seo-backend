@@ -15,61 +15,75 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "'file_id' is required." });
     }
 
-    // STEP 1 — Download the file from ChatGPT's hosted file URL
-    const fileUrl = `https://api.openai.com/v1/files/${file_id}/content`;
-
-    const fileResponse = await fetch(fileUrl, {
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
+    // 1. Fetch file metadata — this contains MIME TYPE
+    const metaResp = await fetch(`https://api.openai.com/v1/files/${file_id}`, {
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
     });
 
-    const arrayBuffer = await fileResponse.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    const metadata = await metaResp.json();
+    const mime = metadata?.mime_type || "";
 
-    // Detect file type
-    if (file_id.endsWith(".pdf")) {
+    // 2. Fetch the actual file content
+    const fileResp = await fetch(
+      `https://api.openai.com/v1/files/${file_id}/content`,
+      {
+        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
+      }
+    );
+
+    const buffer = Buffer.from(await fileResp.arrayBuffer());
+
+    // 3. Process based on MIME TYPE
+    if (mime === "text/plain") {
+      return res.status(200).json({
+        success: true,
+        type: "txt",
+        text: buffer.toString("utf8")
+      });
+    }
+
+    if (mime === "application/pdf") {
       const text = await extractPDF(buffer);
       return res.status(200).json({ success: true, type: "pdf", text });
     }
 
-    if (file_id.endsWith(".docx")) {
+    if (
+      mime ===
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ) {
       const text = await extractDOCX(buffer);
       return res.status(200).json({ success: true, type: "docx", text });
     }
 
-    if (file_id.endsWith(".txt")) {
-      return res.status(200).json({
-        success: true,
-        type: "txt",
-        text: buffer.toString("utf8"),
-      });
-    }
-
-    return res.status(400).json({ error: "Unsupported file type." });
+    return res.status(400).json({
+      error: `Unsupported MIME type: ${mime}`
+    });
 
   } catch (err) {
     return res.status(500).json({
       error: "Failed to parse file.",
-      details: err.message || String(err),
+      details: err.message
     });
   }
 }
 
-// PDF extraction
+// PDF parser
 async function extractPDF(buffer) {
-  const pdfDoc = await PDFDocument.load(buffer);
-  const pages = pdfDoc.getPages();
-  let text = "";
+  try {
+    const pdfDoc = await PDFDocument.load(buffer);
+    let text = "";
 
-  for (const page of pages) {
-    text += page.getTextContent?.() || ""; // fallback if getTextContent unavailable
+    for (const page of pdfDoc.getPages()) {
+      text += page.getTextContent?.() || "";
+    }
+
+    return text;
+  } catch {
+    return "";
   }
-
-  return text;
 }
 
-// DOCX extraction
+// DOCX parser
 async function extractDOCX(buffer) {
   const result = await mammoth.extractRawText({ buffer });
   return result.value || "";
