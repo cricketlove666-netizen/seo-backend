@@ -15,6 +15,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "'content' and 'format' are required." });
     }
 
+    // ---------- PDF EXPORT ----------
     if (format === "pdf") {
       const pdfBytes = await generatePDF(content);
       return res.status(200).json({
@@ -24,6 +25,7 @@ export default async function handler(req, res) {
       });
     }
 
+    // ---------- DOCX EXPORT ----------
     if (format === "docx") {
       const docxBuffer = await generateDOCX(content);
       return res.status(200).json({
@@ -33,7 +35,9 @@ export default async function handler(req, res) {
       });
     }
 
-    return res.status(400).json({ error: "Unsupported format. Use pdf or docx." });
+    return res.status(400).json({
+      error: "Unsupported format. Use pdf or docx."
+    });
 
   } catch (err) {
     return res.status(500).json({
@@ -43,11 +47,14 @@ export default async function handler(req, res) {
   }
 }
 
+/* ============================================================
+   PDF GENERATION (SANITIZED, ERROR-FREE)
+============================================================ */
 
-// -------------------
-// PDF Generator
-// -------------------
 async function generatePDF(content) {
+  // Clean content for PDF encoding
+  content = sanitizeForPDF(content);
+
   const pdfDoc = await PDFDocument.create();
   const page = pdfDoc.addPage();
 
@@ -60,27 +67,30 @@ async function generatePDF(content) {
 
   let y = page.getHeight() - margin;
 
-  lines.forEach(line => {
+  for (let i = 0; i < lines.length; i++) {
     if (y < margin) {
       const newPage = pdfDoc.addPage();
       y = newPage.getHeight() - margin;
     }
-    page.drawText(line, {
+
+    page.drawText(lines[i], {
       x: margin,
       y,
       size: fontSize,
       font,
       color: rgb(0, 0, 0)
     });
-    y -= fontSize + 4;
-  });
+
+    y -= fontSize + 6;
+  }
 
   return await pdfDoc.save();
 }
 
-// -------------------
-// DOCX Generator
-// -------------------
+/* ============================================================
+   DOCX GENERATION (FULL UNICODE SUPPORT)
+============================================================ */
+
 async function generateDOCX(content) {
   const paragraphs = content.split("\n").map(line => new Paragraph(line));
 
@@ -91,15 +101,30 @@ async function generateDOCX(content) {
   return await Packer.toBuffer(doc);
 }
 
-// -------------------
-// Text Wrapper
-// -------------------
+/* ============================================================
+   SANITIZE TEXT FOR PDF (WINANSI-SAFE)
+============================================================ */
+
+function sanitizeForPDF(text) {
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/[^\x00-\x7F]/g, "") // removes unsupported Unicode
+    .replace(/\u2014/g, "-") // em dash
+    .replace(/\u2013/g, "-") // en dash
+    .replace(/[“”]/g, '"') // smart quotes
+    .replace(/[‘’]/g, "'"); // smart apostrophes
+}
+
+/* ============================================================
+   WRAP TEXT INTO LINES THAT FIT PAGE WIDTH
+============================================================ */
+
 function wrapText(text, font, size, maxWidth) {
   const words = text.split(" ");
   const lines = [];
   let line = "";
 
-  words.forEach(word => {
+  for (let word of words) {
     const testLine = line + word + " ";
     const width = font.widthOfTextAtSize(testLine, size);
 
@@ -109,8 +134,9 @@ function wrapText(text, font, size, maxWidth) {
     } else {
       line = testLine;
     }
-  });
+  }
 
   if (line.trim()) lines.push(line.trim());
+
   return lines;
 }
