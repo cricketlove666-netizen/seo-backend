@@ -14,106 +14,118 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "'file_id' is required." });
     }
 
-    // Fetch metadata from OpenAI
+    // Fetch metadata
     const metaResp = await fetch(`https://api.openai.com/v1/files/${file_id}`, {
-      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
     });
 
     const metadata = await metaResp.json();
     const mime = metadata?.mime_type || "";
 
-    // Fetch actual file content
+    // Fetch file content (as array buffer)
     const fileResp = await fetch(
       `https://api.openai.com/v1/files/${file_id}/content`,
       {
-        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
+        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
       }
     );
 
     const arrayBuffer = await fileResp.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    /* =================================================
-       1️⃣ UNIVERSAL TEXT FALLBACK (never crashes)
-    ================================================= */
+    /* =========================================================
+       UNIVERSAL SAFE TEXT READER (NEVER CRASHES)
+    ========================================================= */
     if (
       mime.startsWith("text/") ||
-      mime.includes("octet-stream") ||  // .txt and ChatGPT uploads
+      mime.includes("octet-stream") ||
       mime.includes("markdown") ||
       mime.includes("json") ||
       mime.includes("csv") ||
-      mime === ""  // UNKNOWN
+      mime === ""
     ) {
-      let text = safeDecodeUTF8(buffer);
+      const text = safeTextFromBuffer(buffer);
       return res.status(200).json({
         success: true,
         type: "text",
-        text
+        text,
       });
     }
 
-    /* =================================================
-       2️⃣ PDF SUPPORT
-    ================================================= */
+    /* =========================================================
+       PDF READER
+    ========================================================= */
     if (mime === "application/pdf") {
-      const text = await extractPDF(buffer);
+      const text = await safePDFExtract(buffer);
       return res.status(200).json({
         success: true,
         type: "pdf",
-        text
+        text,
       });
     }
 
-    /* =================================================
-       3️⃣ DOCX SUPPORT
-    ================================================= */
+    /* =========================================================
+       DOCX READER
+    ========================================================= */
     if (
-      mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      mime ===
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     ) {
-      const text = await extractDOCX(buffer);
+      const text = await safeDOCXExtract(buffer);
       return res.status(200).json({
         success: true,
         type: "docx",
-        text
+        text,
       });
     }
 
+    /* =========================================================
+       FALLBACK
+    ========================================================= */
     return res.status(400).json({
-      error: `Unsupported MIME type: ${mime}`
+      error: `Unsupported MIME type: ${mime}`,
     });
-
   } catch (err) {
     return res.status(500).json({
       error: "Server error in parse-file.",
-      details: err.message
+      details: err.message,
     });
   }
 }
 
-/* =================================================
-   SAFE UTF-8 DECODER (never crashes)
-================================================= */
-function safeDecodeUTF8(buffer) {
+/* =========================================================
+   SAFE UTF-8 DECODER (NEVER CRASHES)
+========================================================= */
+function safeTextFromBuffer(buffer) {
   try {
-    return buffer.toString("utf8");
+    // Split huge buffers into safe chunks
+    const chunkSize = 16384;
+    let text = "";
+
+    for (let i = 0; i < buffer.length; i += chunkSize) {
+      const chunk = buffer.slice(i, i + chunkSize);
+      text += chunk.toString("utf8");
+    }
+
+    return text.replace(/\uFFFD/g, ""); // remove bad chars
   } catch {
     return buffer.toString(); // fallback
   }
 }
 
-/* =================================================
-   PDF PARSER (EXTREMELY SAFE)
-================================================= */
-async function extractPDF(buffer) {
+/* =========================================================
+   SAFE PDF EXTRACTOR
+========================================================= */
+async function safePDFExtract(buffer) {
   try {
     const pdfDoc = await PDFDocument.load(buffer);
     const pages = pdfDoc.getPages();
     let text = "";
 
     for (const page of pages) {
-      if (page.getTextContent) {
-        text += page.getTextContent() || "";
-      }
+      try {
+        text += page.getTextContent?.() || "";
+      } catch {}
     }
 
     return text;
@@ -122,10 +134,10 @@ async function extractPDF(buffer) {
   }
 }
 
-/* =================================================
-   DOCX PARSER
-================================================= */
-async function extractDOCX(buffer) {
+/* =========================================================
+   SAFE DOCX EXTRACTOR
+========================================================= */
+async function safeDOCXExtract(buffer) {
   try {
     const result = await mammoth.extractRawText({ buffer });
     return result.value || "";
