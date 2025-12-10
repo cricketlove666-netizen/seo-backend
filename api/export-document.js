@@ -3,21 +3,31 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { Document, Packer, Paragraph } from "docx";
 
+// Auto-switch formats: If content has Unicode → use DOCX
+function requiresDOCX(text) {
+  return /[^\x00-\x7F]/.test(text);  // detect unicode
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Use POST method." });
   }
 
   try {
-    const { content, format } = req.body;
+    let { content, format } = req.body;
 
     if (!content || !format) {
       return res.status(400).json({ error: "'content' and 'format' are required." });
     }
 
-    // ---------- PDF EXPORT ----------
+    // Auto-switch to DOCX if content has unicode
+    if (requiresDOCX(content) && format === "pdf") {
+      format = "docx";
+    }
+
+    // ---------- PDF ----------
     if (format === "pdf") {
-      const pdfBytes = await generatePDF(content);
+      const pdfBytes = await createSafePDF(content);
       return res.status(200).json({
         success: true,
         format: "pdf",
@@ -25,118 +35,104 @@ export default async function handler(req, res) {
       });
     }
 
-    // ---------- DOCX EXPORT ----------
+    // ---------- DOCX ----------
     if (format === "docx") {
-      const docxBuffer = await generateDOCX(content);
+      const buffer = await createDOCX(content);
       return res.status(200).json({
         success: true,
         format: "docx",
-        base64: docxBuffer.toString("base64")
+        base64: buffer.toString("base64")
       });
     }
 
-    return res.status(400).json({
-      error: "Unsupported format. Use pdf or docx."
-    });
+    return res.status(400).json({ error: "Unsupported format. Use pdf or docx." });
 
   } catch (err) {
     return res.status(500).json({
-      error: "Failed to export document.",
+      error: "Document export failed.",
       details: err.message
     });
   }
 }
 
-/* ============================================================
-   PDF GENERATION (SANITIZED, ERROR-FREE)
-============================================================ */
+/* ======================
+   PDF (SAFE GENERATOR)
+======================= */
+async function createSafePDF(text) {
+  text = cleanForPDF(text);
 
-async function generatePDF(content) {
-  // Clean content for PDF encoding
-  content = sanitizeForPDF(content);
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage();
 
-  const pdfDoc = await PDFDocument.create();
-  const page = pdfDoc.addPage();
-
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
   const fontSize = 14;
   const margin = 40;
   const maxWidth = page.getWidth() - margin * 2;
 
-  const lines = wrapText(content, font, fontSize, maxWidth);
-
+  const lines = wrap(text, font, fontSize, maxWidth);
   let y = page.getHeight() - margin;
 
-  for (let i = 0; i < lines.length; i++) {
+  for (const line of lines) {
     if (y < margin) {
-      const newPage = pdfDoc.addPage();
+      const newPage = pdf.addPage();
       y = newPage.getHeight() - margin;
     }
 
-    page.drawText(lines[i], {
+    page.drawText(line, {
       x: margin,
       y,
-      size: fontSize,
       font,
+      size: fontSize,
       color: rgb(0, 0, 0)
     });
 
     y -= fontSize + 6;
   }
 
-  return await pdfDoc.save();
+  return await pdf.save();
 }
 
-/* ============================================================
-   DOCX GENERATION (FULL UNICODE SUPPORT)
-============================================================ */
-
-async function generateDOCX(content) {
-  const paragraphs = content.split("\n").map(line => new Paragraph(line));
-
-  const doc = new Document({
-    sections: [{ children: paragraphs }]
-  });
-
+/* ======================
+   DOCX GENERATOR
+======================= */
+async function createDOCX(text) {
+  const paragraphs = text.split("\n").map(line => new Paragraph(line));
+  const doc = new Document({ sections: [{ children: paragraphs }] });
   return await Packer.toBuffer(doc);
 }
 
-/* ============================================================
-   SANITIZE TEXT FOR PDF (WINANSI-SAFE)
-============================================================ */
-
-function sanitizeForPDF(text) {
+/* ======================
+   SANITIZE FOR PDF
+======================= */
+function cleanForPDF(text) {
   return text
     .replace(/\r\n/g, "\n")
-    .replace(/[^\x00-\x7F]/g, "") // removes unsupported Unicode
-    .replace(/\u2014/g, "-") // em dash
-    .replace(/\u2013/g, "-") // en dash
-    .replace(/[“”]/g, '"') // smart quotes
-    .replace(/[‘’]/g, "'"); // smart apostrophes
+    .replace(/[^\x00-\x7F]/g, "") // strip unsupported chars
+    .replace(/\u2014/g, "-")
+    .replace(/\u2013/g, "-")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/•/g, "*")
+    .replace(/\t/g, "  ");
 }
 
-/* ============================================================
-   WRAP TEXT INTO LINES THAT FIT PAGE WIDTH
-============================================================ */
-
-function wrapText(text, font, size, maxWidth) {
+/* ======================
+   TEXT WRAPPING
+======================= */
+function wrap(text, font, size, maxWidth) {
   const words = text.split(" ");
   const lines = [];
   let line = "";
 
-  for (let word of words) {
+  for (const word of words) {
     const testLine = line + word + " ";
-    const width = font.widthOfTextAtSize(testLine, size);
-
-    if (width > maxWidth) {
+    if (font.widthOfTextAtSize(testLine, size) > maxWidth) {
       lines.push(line.trim());
       line = word + " ";
     } else {
       line = testLine;
     }
   }
-
   if (line.trim()) lines.push(line.trim());
-
   return lines;
 }
