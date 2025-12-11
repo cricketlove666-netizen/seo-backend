@@ -1,51 +1,53 @@
 // api/parse-file.js
 
-import fetch from "node-fetch";
-
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
       return res.status(405).json({ error: "Use POST method." });
     }
 
-    const { file_id } = req.body;
+    const { file_base64, filename } = req.body;
 
-    if (!file_id) {
+    if (!file_base64 || !filename) {
       return res.status(400).json({
-        error: "'file_id' is required by this endpoint."
+        error: "Both 'file_base64' and 'filename' are required."
       });
     }
 
-    const response = await fetch(
-      `https://api.openai.com/v1/files/${file_id}/content`,
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
-        }
-      }
-    );
+    // Decode base64 into a Buffer
+    const buffer = Buffer.from(file_base64, "base64");
 
-    if (!response.ok) {
-      const errText = await response.text();
-      return res.status(500).json({
-        error: "Failed to fetch file from OpenAI.",
-        details: errText
-      });
-    }
-
-    const buffer = Buffer.from(await response.arrayBuffer());
-    const text = buffer.toString("utf-8");
+    // Convert buffer → UTF-8 text safely
+    const text = safeDecode(buffer);
 
     return res.status(200).json({
       success: true,
-      type: "text",
+      filename,
       length: text.length,
-      text: text.slice(0, 100000) // safety limit
+      preview: text.slice(0, 50000)   // limit to 50k chars
     });
+
   } catch (err) {
     return res.status(500).json({
       error: "Server error in parse-file.",
       details: err.message
     });
+  }
+}
+
+// Safe UTF-8 decoding for large files
+function safeDecode(buffer) {
+  try {
+    let result = "";
+    const chunkSize = 32768;
+
+    for (let i = 0; i < buffer.length; i += chunkSize) {
+      result += buffer.slice(i, i + chunkSize).toString("utf-8");
+      if (result.length > 300000) break;
+    }
+
+    return result.replace(/\uFFFD/g, ""); // remove replacement chars
+  } catch {
+    return buffer.toString("utf-8");
   }
 }
