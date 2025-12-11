@@ -1,35 +1,47 @@
 // api/parse-file.js
 
+import fetch from "node-fetch";
+
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
       return res.status(405).json({ error: "Use POST method." });
     }
 
-    const { file_base64, filename } = req.body;
+    const { file_id } = req.body;
 
-    if (!file_base64 || !filename) {
+    if (!file_id) {
       return res.status(400).json({
-        error: "'file_base64' and 'filename' are required."
+        error: "'file_id' is required by this endpoint."
       });
     }
 
-    // Decode base64 into raw buffer
-    const buffer = Buffer.from(file_base64, "base64");
+    const response = await fetch(
+      `https://api.openai.com/v1/files/${file_id}/content`,
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+        }
+      }
+    );
 
-    // Convert buffer to readable UTF-8 text
+    if (!response.ok) {
+      const errText = await response.text();
+      return res.status(500).json({
+        error: "Failed to fetch file from OpenAI.",
+        details: errText
+      });
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
     const text = buffer.toString("utf-8");
-
-    // Limit output to protect server memory
-    const safe = text.slice(0, 200000);
 
     return res.status(200).json({
       success: true,
-      filename,
-      length: safe.length,
-      text: safe
+      type: "text",
+      length: text.length,
+      text: text.slice(0, 100000) // safety limit
     });
-
   } catch (err) {
     return res.status(500).json({
       error: "Server error in parse-file.",
