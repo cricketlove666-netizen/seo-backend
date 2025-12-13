@@ -1,76 +1,87 @@
 // api/parse_file.js
 
 export default async function handler(req, res) {
-  console.log("REQUEST BODY:", req.body);
+  console.log("Incoming parse_file request:", req.body);
 
   try {
     if (req.method !== "POST") {
-      return res.status(405).json({ error: "Only POST allowed." });
+      return res.status(405).json({ error: "Only POST method allowed." });
     }
 
     const { file_id, file_base64, filename } = req.body;
 
-    //----------------------------------------
-    // CASE 1 — Parse using OpenAI file_id
-    //----------------------------------------
+    // -----------------------------
+    // CASE 1 — Using OpenAI File ID
+    // -----------------------------
     if (file_id) {
       try {
-        const openAiRes = await fetch(`https://api.openai.com/v1/files/${file_id}/content`, {
-          headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
-        });
+        const openaiRes = await fetch(
+          `https://api.openai.com/v1/files/${file_id}/content`,
+          {
+            headers: {
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+            }
+          }
+        );
 
-        if (!openAiRes.ok) {
-          const errTxt = await openAiRes.text();
-          console.error("OpenAI FILE_ID ERROR:", errTxt);
+        if (!openaiRes.ok) {
+          const errorText = await openaiRes.text();
+          console.error("OpenAI error:", errorText);
           return res.status(500).json({
-            error: "OpenAI file content fetch failed.",
-            details: errTxt
+            error: "Failed to retrieve file from OpenAI",
+            details: errorText
           });
         }
 
-        const buffer = Buffer.from(await openAiRes.arrayBuffer());
+        const buffer = Buffer.from(await openaiRes.arrayBuffer());
         const text = buffer.toString("utf-8");
 
         return res.status(200).json({
-          method: "file_id",
+          source: "file_id",
           text
         });
       } catch (err) {
-        console.error("FILE_ID PARSING ERROR:", err);
-        return res.status(500).json({ error: "File ID parse failed", details: err.message });
+        console.error("FILE_ID parsing error:", err);
+        return res.status(500).json({
+          error: "Error parsing file using file_id",
+          details: err.message
+        });
       }
     }
 
-    //----------------------------------------
-    // CASE 2 — Parse using base64 content
-    //----------------------------------------
+    // -----------------------------
+    // CASE 2 — Using Base64 upload
+    // -----------------------------
     if (file_base64 && filename) {
       try {
         const buffer = Buffer.from(file_base64, "base64");
         const text = buffer.toString("utf-8");
 
         return res.status(200).json({
-          method: "base64",
+          source: "base64",
           filename,
           text
         });
       } catch (err) {
-        console.error("BASE64 PARSE ERROR:", err);
-        return res.status(500).json({ error: "Base64 file parse failed", details: err.message });
+        console.error("BASE64 parsing error:", err);
+        return res.status(500).json({
+          error: "Error parsing base64 file",
+          details: err.message
+        });
       }
     }
 
-    //----------------------------------------
-    // If nothing valid was provided
-    //----------------------------------------
+    // -----------------------------
+    // No valid input provided
+    // -----------------------------
     return res.status(400).json({
-      error: "Provide either { file_id } OR { file_base64, filename }."
+      error: "Missing required input. Provide 'file_id' OR 'file_base64' + 'filename'."
     });
 
   } catch (err) {
-    console.error("GENERAL PARSE ERROR:", err);
-    res.status(500).json({
-      error: "Server crashed inside parse_file.",
+    console.error("General server crash:", err);
+    return res.status(500).json({
+      error: "Internal server error in parse_file.",
       details: err.message
     });
   }
