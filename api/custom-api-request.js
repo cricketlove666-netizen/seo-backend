@@ -1,65 +1,71 @@
-// api/custom-api-request.js
-
 export default async function handler(req, res) {
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "Use POST method." });
+    return res.status(405).json({ error: "POST only" });
   }
 
   try {
-    const { endpoint, method, params, body, headers } = req.body;
+    const { provider, operation, params } = req.body;
 
-    if (!endpoint || !method) {
+    if (!provider || !operation) {
       return res.status(400).json({
-        error: "'endpoint' and 'method' are required."
+        error: "provider and operation are required"
       });
     }
 
-    // Build full URL with query params
-    let url = endpoint;
-
-    if (params && typeof params === "object") {
-      const queryString = new URLSearchParams(params).toString();
-      url += "?" + queryString;
+    // TEMP: mock responses (no real APIs yet)
+    if (provider === "gsc") {
+      return res.json({
+        provider: "gsc",
+        operation,
+        message: "Google Search Console connected",
+        params
+      });
     }
 
-    // Default headers
-    let finalHeaders = {
-      "Content-Type": "application/json",
-      ...(headers || {})
-    };
-
-    // Example: attach AUTH tokens automatically (optional)
-    if (process.env.GSC_API_KEY) {
-      finalHeaders["Authorization"] = `Bearer ${process.env.GSC_API_KEY}`;
+    if (provider === "ga4") {
+      return res.json({
+        provider: "ga4",
+        operation,
+        message: "Google Analytics 4 connected",
+        params
+      });
     }
 
-    // Make request to target API
-    const requestOptions = {
-      method: method.toUpperCase(),
-      headers: finalHeaders
-    };
-
-    if (["POST", "PUT", "PATCH"].includes(method.toUpperCase())) {
-      requestOptions.body = JSON.stringify(body || {});
+    if (provider === "semrush") {
+      return res.json({
+        provider: "semrush",
+        operation,
+        message: "Semrush connected",
+        params
+      });
     }
 
-    const response = await fetch(url, requestOptions);
+    if (provider === "ahrefs") {
+      return res.json({
+        provider: "ahrefs",
+        operation,
+        message: "Ahrefs connected",
+        params
+      });
+    }
 
-    const data = await response
-      .json()
-      .catch(() => ({ raw: "Could not parse JSON", status: response.status }));
+    if (provider === "ubersuggest") {
+      return res.json({
+        provider: "ubersuggest",
+        operation,
+        message: "Ubersuggest connected",
+        params
+      });
+    }
 
-    return res.status(200).json({
-      success: true,
-      status: response.status,
-      url,
-      data
+    return res.status(400).json({
+      error: "Unknown provider"
     });
 
   } catch (err) {
     return res.status(500).json({
-      error: "Failed to call external API.",
-      details: err.message
+      error: "Server error",
+      message: err.message
     });
   }
 }
