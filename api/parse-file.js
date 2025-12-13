@@ -1,30 +1,95 @@
 // api/parse-file.js
 
+import fetch from "node-fetch";
+import mammoth from "mammoth";
+import { PDFDocument } from "pdf-lib";
+
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
       return res.status(405).json({ error: "Use POST method." });
     }
 
-    const { file_base64, filename } = req.body;
+    const { file_id, file_base64, filename } = req.body;
 
-    if (!file_base64 || !filename) {
+    // ======================================================
+    // 1) SUPPORT BOTH METHODS
+    // ======================================================
+
+    let buffer;
+
+    // -------- FILE ID METHOD (OpenAI Files API) --------
+    if (file_id) {
+      const response = await fetch(
+        `https://api.openai.com/v1/files/${file_id}/content`,
+        {
+          headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
+        }
+      );
+
+      if (!response.ok) {
+        return res.status(500).json({
+          error: "Failed to fetch file from OpenAI.",
+          status: response.status
+        });
+      }
+
+      buffer = Buffer.from(await response.arrayBuffer());
+    }
+
+    // -------- BASE64 METHOD --------
+    else if (file_base64 && filename) {
+      try {
+        buffer = Buffer.from(file_base64, "base64");
+      } catch (e) {
+        return res.status(400).json({
+          error: "Invalid base64 content.",
+          details: e.message
+        });
+      }
+    }
+
+    // -------- NEITHER PRESENT --------
+    else {
       return res.status(400).json({
-        error: "Both 'file_base64' and 'filename' are required."
+        error: "Either 'file_id' or ('file_base64' + 'filename') is required."
       });
     }
 
-    // Decode base64 into a Buffer
-    const buffer = Buffer.from(file_base64, "base64");
+    // ======================================================
+    // 2) PARSE CONTENT BY FILE TYPE
+    // ======================================================
 
-    // Convert buffer → UTF-8 text safely
-    const text = safeDecode(buffer);
+    const ext = filename?.split(".").pop().toLowerCase() || "txt";
+
+    let text = "";
+
+    if (ext === "txt" || !ext) {
+      text = buffer.toString("utf-8");
+    }
+
+    else if (ext === "docx") {
+      const result = await mammoth.extractRawText({ buffer });
+      text = result.value;
+    }
+
+    else if (ext === "pdf") {
+      const pdf = await PDFDocument.load(buffer);
+      const pages = pdf.getPages();
+      text = pages.map(p => p.getTextContent?.()?.items?.map(i => i.str).join(" ")).join("\n");
+    }
+
+    else {
+      text = buffer.toString("utf-8");
+    }
+
+    // Limit huge files
+    text = text.slice(0, 300000);
 
     return res.status(200).json({
       success: true,
-      filename,
       length: text.length,
-      preview: text.slice(0, 50000)   // limit to 50k chars
+      text
     });
 
   } catch (err) {
@@ -32,22 +97,5 @@ export default async function handler(req, res) {
       error: "Server error in parse-file.",
       details: err.message
     });
-  }
-}
-
-// Safe UTF-8 decoding for large files
-function safeDecode(buffer) {
-  try {
-    let result = "";
-    const chunkSize = 32768;
-
-    for (let i = 0; i < buffer.length; i += chunkSize) {
-      result += buffer.slice(i, i + chunkSize).toString("utf-8");
-      if (result.length > 300000) break;
-    }
-
-    return result.replace(/\uFFFD/g, ""); // remove replacement chars
-  } catch {
-    return buffer.toString("utf-8");
   }
 }
