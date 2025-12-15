@@ -1,27 +1,47 @@
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "POST method required" });
-  }
-
   try {
-    const { provider, operation, params } = req.body;
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Use POST method." });
+    }
 
-    if (!provider || !operation) {
+    const {
+      endpoint,
+      method = "GET",
+      headers = {},
+      body
+    } = req.body;
+
+    if (!endpoint || !method) {
       return res.status(400).json({
-        error: "'provider' and 'operation' are required."
+        error: "'endpoint' and 'method' are required."
       });
     }
 
-    // Placeholder logic for external providers
-    if (["gsc", "ga4", "semrush", "ahrefs", "ubersuggest"].includes(provider)) {
-      return res.status(501).json({
-        error: `${provider} integration not implemented yet.`,
-        hint: "Add provider-specific logic here."
-      });
+    const fetchOptions = {
+      method,
+      headers
+    };
+
+    if (body && method !== "GET") {
+      fetchOptions.body = JSON.stringify(body);
+      fetchOptions.headers["Content-Type"] = "application/json";
     }
 
-    return res.status(400).json({
-      error: "Unknown provider"
+    const response = await fetch(endpoint, fetchOptions);
+    const text = await response.text();
+
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+
+    return res.status(200).json({
+      success: true,
+      status: response.status,
+      url: endpoint,
+      data
     });
 
   } catch (err) {
